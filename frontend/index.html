@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Library Management System</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Login Page -->
+    <div id="login-page" class="page active">
+      <div class="login-container">
+        <div class="login-card">
+          <div class="login-header">
+            <i class="fas fa-book-open"></i>
+            <h1>Library Management</h1>
+            <p>Sign in to your account</p>
+          </div>
+          <form id="login-form">
+            <div class="form-group">
+              <label for="email">Email</label>
+              <input type="email" id="email" name="email" required placeholder="admin@library.com">
+            </div>
+            <div class="form-group">
+              <label for="password">Password</label>
+              <input type="password" id="password" name="password" required placeholder="Enter password">
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+            <div id="login-error" class="error-message"></div>
+          </form>
+          <div class="login-footer">
+            <p>Use the administrator account you created during setup.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="dashboard-page" class="page">
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <i class="fas fa-book-open"></i>
+          <span>LibraryMS</span>
+        </div>
+        <nav class="sidebar-nav">
+          <ul>
+            <li><a href="#" data-page="dashboard" class="nav-link active"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a></li>
+            <li><a href="#" data-page="books" class="nav-link"><i class="fas fa-book"></i><span>Books</span></a></li>
+            <li><a href="#" data-page="members" class="nav-link"><i class="fas fa-users"></i><span>Members</span></a></li>
+            <li><a href="#" data-page="transactions" class="nav-link"><i class="fas fa-exchange-alt"></i><span>Transactions</span></a></li>
+            <li><a href="#" data-page="categories" class="nav-link"><i class="fas fa-tags"></i><span>Categories</span></a></li>
+            <li><a href="#" data-page="reports" class="nav-link"><i class="fas fa-chart-bar"></i><span>Reports</span></a></li>
+          </ul>
+        </nav>
+        <div class="sidebar-footer">
+          <button id="logout-btn" class="btn btn-outline btn-block"><i class="fas fa-sign-out-alt"></i><span>Logout</span></button>
+        </div>
+      </aside>
+
+      <div class="main-content">
+        <header class="top-navbar">
+          <button id="menu-toggle" class="menu-toggle"><i class="fas fa-bars"></i></button>
+          <h1 id="page-title">Dashboard</h1>
+          <div class="user-menu">
+            <span id="user-name">Admin</span>
+            <i class="fas fa-user-circle"></i>
+          </div>
+        </header>
+
+        <main id="page-content" class="page-content">
+          <!-- Pages will be loaded here -->
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Template -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal Title</h3>
+        <button class="modal-close" id="modal-close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/pages/dashboard.js"></script>
+  <script src="js/pages/books.js"></script>
+  <script src="js/pages/members.js"></script>
+  <script src="js/pages/transactions.js"></script>
+  <script src="js/pages/categories.js"></script>
+  <script src="js/pages/reports.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
