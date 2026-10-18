@@ -1,5 +1,5 @@
 /* Central API helper. Update API_BASE if your backend runs elsewhere. */
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = 'https://mars-library-backend.onrender.com/api';
 const Api = {
   token(){ return localStorage.getItem('library_token'); },
   async request(path, options = {}) {
