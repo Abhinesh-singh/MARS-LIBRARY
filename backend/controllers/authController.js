@@ -4,9 +4,13 @@ const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 
 const generateToken = (user) => {
+  if (!process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET is not configured');
+  }
+
   return jwt.sign(
     { id: user.id, username: user.username, role: user.role },
-    process.env.JWT_SECRET || 'library_secret_key',
+    process.env.JWT_SECRET,
     { expiresIn: '24h' }
   );
 };
