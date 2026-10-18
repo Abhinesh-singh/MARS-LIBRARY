@@ -6,20 +6,69 @@ const {
   getFineRate
 } = require('../utils/calculateFine');
 
-// Get all transactions with pagination and status filter
+// Convert database date to YYYY-MM-DD safely.
+function normalizeDate(value) {
+  if (value instanceof Date) {
+    // Use UTC date components for MySQL DATE values returned as Date.
+    const year = value.getUTCFullYear();
+    const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(value.getUTCDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+  }
+
+  if (typeof value === 'string') {
+    // Handles YYYY-MM-DD and datetime strings beginning with that date.
+    const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+  }
+
+  return null;
+}
+
+// Strictly validate a calendar date in YYYY-MM-DD format.
+function isValidDate(value) {
+  if (typeof value !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
+}
+
+function todayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function validPositiveInteger(value, fallback, maximum) {
+  const parsed = Number(value);
+
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return Math.min(parsed, maximum);
+}
+
+// GET all transactions
 const getTransactions = async (req, res, next) => {
   try {
-    const { status } = req.query;
-
-    // Validate pagination values
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(
-      100,
-      Math.max(1, parseInt(req.query.limit, 10) || 10)
-    );
+    const page = validPositiveInteger(req.query.page, 1, 1000000);
+    const limit = validPositiveInteger(req.query.limit, 10, 100);
     const offset = (page - 1) * limit;
+    const status = req.query.status;
 
-    let whereClause = 'WHERE 1=1';
+    let whereClause = 'WHERE 1 = 1';
     const params = [];
 
     if (status) {
@@ -27,34 +76,38 @@ const getTransactions = async (req, res, next) => {
       params.push(status);
     }
 
-    // Use validated integers in LIMIT and OFFSET for TiDB
     const [transactions] = await pool.query(
       `SELECT
-        t.id, t.book_id, t.member_id,
-        t.issue_date, t.due_date, t.return_date,
-        t.status, t.fine_amount,
-        b.title AS book_title,
-        b.author AS book_author,
-        b.isbn,
-        m.member_id AS member_code,
-        m.full_name AS member_name
+          t.id,
+          t.book_id,
+          t.member_id,
+          DATE_FORMAT(t.issue_date, '%Y-%m-%d') AS issue_date,
+          DATE_FORMAT(t.due_date, '%Y-%m-%d') AS due_date,
+          DATE_FORMAT(t.return_date, '%Y-%m-%d') AS return_date,
+          t.status,
+          t.fine_amount,
+          b.title AS book_title,
+          b.author AS book_author,
+          b.isbn,
+          m.member_id AS member_code,
+          m.full_name AS member_name
        FROM transactions t
        JOIN books b ON t.book_id = b.id
        JOIN members m ON t.member_id = m.id
        ${whereClause}
-       ORDER BY t.issue_date DESC
+       ORDER BY t.issue_date DESC, t.id DESC
        LIMIT ${limit} OFFSET ${offset}`,
       params
     );
 
-    const [total] = await pool.query(
+    const [totalRows] = await pool.query(
       `SELECT COUNT(*) AS count
        FROM transactions t
        ${whereClause}`,
       params
     );
 
-    const totalCount = Number(total[0].count);
+    const total = Number(totalRows[0].count);
 
     res.json({
       success: true,
@@ -62,8 +115,8 @@ const getTransactions = async (req, res, next) => {
       pagination: {
         page,
         limit,
-        total: totalCount,
-        totalPages: Math.ceil(totalCount / limit)
+        total,
+        totalPages: Math.ceil(total / limit)
       }
     });
   } catch (error) {
@@ -71,11 +124,10 @@ const getTransactions = async (req, res, next) => {
   }
 };
 
-// Issue a book to an active member
+// Issue a book
 const issueBook = async (req, res, next) => {
   let connection;
   let transactionStarted = false;
-  let transactionCommitted = false;
 
   try {
     const errors = validationResult(req);
@@ -89,21 +141,37 @@ const issueBook = async (req, res, next) => {
 
     const { book_id, member_id, issue_date, due_date } = req.body;
 
-    const issueDate = issue_date ||
-      new Date().toISOString().slice(0, 10);
-
-    const dueDate = due_date ||
-      new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
-        .toISOString().slice(0, 10);
-
-    if (
-      !Number.isFinite(Date.parse(issueDate)) ||
-      !Number.isFinite(Date.parse(dueDate)) ||
-      dueDate < issueDate
-    ) {
+    if (!Number.isSafeInteger(Number(book_id)) ||
+        Number(book_id) < 1 ||
+        !Number.isSafeInteger(Number(member_id)) ||
+        Number(member_id) < 1) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide valid issue and due dates.'
+        message: 'Valid book and member IDs are required.'
+      });
+    }
+
+    const issueDate = issue_date || todayDate();
+
+    if (!isValidDate(issueDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Issue date must be a valid YYYY-MM-DD date.'
+      });
+    }
+
+    let dueDate = due_date;
+
+    if (!dueDate) {
+      const [year, month, day] = issueDate.split('-').map(Number);
+      const date = new Date(Date.UTC(year, month - 1, day + 14));
+      dueDate = date.toISOString().slice(0, 10);
+    }
+
+    if (!isValidDate(dueDate) || dueDate < issueDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Due date must be valid and cannot be before the issue date.'
       });
     }
 
@@ -111,10 +179,9 @@ const issueBook = async (req, res, next) => {
     await connection.beginTransaction();
     transactionStarted = true;
 
-    // Lock book row to prevent issuing the last copy twice
     const [books] = await connection.query(
       'SELECT * FROM books WHERE id = ? FOR UPDATE',
-      [book_id]
+      [Number(book_id)]
     );
 
     if (books.length === 0) {
@@ -123,7 +190,7 @@ const issueBook = async (req, res, next) => {
 
       return res.status(404).json({
         success: false,
-        message: 'Book not found'
+        message: 'Book not found.'
       });
     }
 
@@ -133,13 +200,13 @@ const issueBook = async (req, res, next) => {
 
       return res.status(400).json({
         success: false,
-        message: 'No copies available for this book'
+        message: 'No copies available for this book.'
       });
     }
 
     const [members] = await connection.query(
-      'SELECT id, status FROM members WHERE id = ?',
-      [member_id]
+      'SELECT * FROM members WHERE id = ?',
+      [Number(member_id)]
     );
 
     if (members.length === 0) {
@@ -148,48 +215,44 @@ const issueBook = async (req, res, next) => {
 
       return res.status(404).json({
         success: false,
-        message: 'Member not found'
+        message: 'Member not found.'
       });
     }
 
-    if (members[0].status !== 'active') {
+    if (String(members[0].status).trim().toLowerCase() !== 'active') {
       await connection.rollback();
       transactionStarted = false;
 
       return res.status(400).json({
         success: false,
-        message: 'Member account is inactive'
+        message: 'Member account is inactive.'
       });
     }
 
     const [result] = await connection.query(
       `INSERT INTO transactions
-        (book_id, member_id, issue_date, due_date, status)
+         (book_id, member_id, issue_date, due_date, status)
        VALUES (?, ?, ?, ?, 'issued')`,
-      [book_id, member_id, issueDate, dueDate]
+      [Number(book_id), Number(member_id), issueDate, dueDate]
     );
 
     await connection.query(
-      `UPDATE books
-       SET available_copies = available_copies - 1
-       WHERE id = ?`,
-      [book_id]
+      'UPDATE books SET available_copies = available_copies - 1 WHERE id = ?',
+      [Number(book_id)]
     );
 
     await connection.commit();
     transactionStarted = false;
-    transactionCommitted = true;
 
-    const [newTransaction] = await pool.query(
+    const [newTransactions] = await pool.query(
       `SELECT
-        t.id, t.book_id, t.member_id,
-        t.issue_date, t.due_date, t.return_date,
-        t.status, t.fine_amount,
-        b.title AS book_title,
-        b.author AS book_author,
-        b.isbn,
-        m.member_id AS member_code,
-        m.full_name AS member_name
+          t.id, t.book_id, t.member_id,
+          DATE_FORMAT(t.issue_date, '%Y-%m-%d') AS issue_date,
+          DATE_FORMAT(t.due_date, '%Y-%m-%d') AS due_date,
+          DATE_FORMAT(t.return_date, '%Y-%m-%d') AS return_date,
+          t.status, t.fine_amount,
+          b.title AS book_title, b.author AS book_author, b.isbn,
+          m.member_id AS member_code, m.full_name AS member_name
        FROM transactions t
        JOIN books b ON t.book_id = b.id
        JOIN members m ON t.member_id = m.id
@@ -197,45 +260,47 @@ const issueBook = async (req, res, next) => {
       [result.insertId]
     );
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: 'Book issued successfully',
-      data: newTransaction[0]
+      message: 'Book issued successfully.',
+      data: newTransactions[0]
     });
   } catch (error) {
-    if (connection && transactionStarted && !transactionCommitted) {
+    if (connection && transactionStarted) {
       try {
         await connection.rollback();
       } catch (rollbackError) {
-        console.error('Issue-book rollback failed:', rollbackError.message);
+        console.error('Issue rollback error:', rollbackError.message);
       }
     }
 
-    next(error);
+    return next(error);
   } finally {
-    if (connection) {
-      connection.release();
-    }
+    if (connection) connection.release();
   }
 };
 
-// Return an issued book and calculate any overdue fine
+// Return a book
 const returnBook = async (req, res, next) => {
   let connection;
   let transactionStarted = false;
-  let transactionCommitted = false;
 
   try {
-    const { id } = req.params;
-    const { return_date } = req.body || {};
+    const id = Number(req.params.id);
+    const suppliedReturnDate = req.body.return_date;
+    const returnDate = suppliedReturnDate || todayDate();
 
-    const returnDate = return_date ||
-      new Date().toISOString().slice(0, 10);
-
-    if (!Number.isFinite(Date.parse(returnDate))) {
+    if (!Number.isSafeInteger(id) || id < 1) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide a valid return date.'
+        message: 'Invalid transaction ID.'
+      });
+    }
+
+    if (!isValidDate(returnDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Return date must be a valid YYYY-MM-DD date.'
       });
     }
 
@@ -244,7 +309,11 @@ const returnBook = async (req, res, next) => {
     transactionStarted = true;
 
     const [transactions] = await connection.query(
-      'SELECT * FROM transactions WHERE id = ? FOR UPDATE',
+      `SELECT *,
+              DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date_text
+       FROM transactions
+       WHERE id = ?
+       FOR UPDATE`,
       [id]
     );
 
@@ -254,67 +323,104 @@ const returnBook = async (req, res, next) => {
 
       return res.status(404).json({
         success: false,
-        message: 'Transaction not found'
+        message: 'Transaction not found.'
       });
     }
 
     const transaction = transactions[0];
+    const currentStatus = String(transaction.status || '')
+      .trim()
+      .toLowerCase();
 
-    if (transaction.status !== 'issued') {
+    console.log('Return-book debug:', {
+      transactionId: id,
+      issueDate: transaction.issue_date_text,
+      returnDate,
+      status: transaction.status
+    });
+
+    if (currentStatus !== 'issued') {
       await connection.rollback();
       transactionStarted = false;
 
       return res.status(400).json({
         success: false,
-        message: 'This transaction is not currently issued.'
+        message: 'This transaction is not currently issued.',
+        data: {
+          transactionId: id,
+          status: transaction.status
+        }
       });
     }
 
-    if (returnDate < String(transaction.issue_date).slice(0, 10)) {
+    const issueDate = normalizeDate(transaction.issue_date_text);
+
+    if (!issueDate || !isValidDate(issueDate)) {
+      await connection.rollback();
+      transactionStarted = false;
+
+      return res.status(500).json({
+        success: false,
+        message: 'Invalid issue date stored for this transaction.'
+      });
+    }
+
+    if (returnDate < issueDate) {
       await connection.rollback();
       transactionStarted = false;
 
       return res.status(400).json({
         success: false,
-        message: 'Return date cannot be before the issue date.'
+        message: 'Return date cannot be before the issue date.',
+        data: {
+          transactionId: id,
+          issueDate,
+          returnDate
+        }
+      });
+    }
+
+    const dueDate = normalizeDate(transaction.due_date);
+
+    if (!dueDate || !isValidDate(dueDate)) {
+      await connection.rollback();
+      transactionStarted = false;
+
+      return res.status(500).json({
+        success: false,
+        message: 'Invalid due date stored for this transaction.'
       });
     }
 
     const fineRate = getFineRate();
-    const fineAmount = calculateFine(
-      transaction.due_date,
-      returnDate,
-      fineRate
-    );
+    const fineAmount = calculateFine(dueDate, returnDate, fineRate);
 
     await connection.query(
       `UPDATE transactions
        SET return_date = ?, status = 'returned', fine_amount = ?
-       WHERE id = ?`,
+       WHERE id = ? AND status = 'issued'`,
       [returnDate, fineAmount, id]
     );
 
+    // Increase stock only if this transaction was still issued.
+    // The transaction row is locked above to prevent double returns.
     await connection.query(
-      `UPDATE books
-       SET available_copies = available_copies + 1
-       WHERE id = ?`,
+      'UPDATE books SET available_copies = available_copies + 1 WHERE id = ?',
       [transaction.book_id]
     );
 
     await connection.commit();
     transactionStarted = false;
-    transactionCommitted = true;
 
-    const [updatedTransaction] = await pool.query(
+    const [updatedTransactions] = await pool.query(
       `SELECT
-        t.id, t.book_id, t.member_id,
-        t.issue_date, t.due_date, t.return_date,
-        t.status, t.fine_amount,
-        b.title AS book_title,
-        b.author AS book_author,
-        b.isbn,
-        m.member_id AS member_code,
-        m.full_name AS member_name
+          t.id, t.book_id, t.member_id,
+          DATE_FORMAT(t.issue_date, '%Y-%m-%d') AS issue_date,
+          DATE_FORMAT(t.due_date, '%Y-%m-%d') AS due_date,
+          DATE_FORMAT(t.return_date, '%Y-%m-%d') AS return_date,
+          t.status, t.fine_amount,
+          b.title AS book_title, b.author AS book_author, b.isbn,
+          m.member_id AS member_code, m.full_name AS member_name
        FROM transactions t
        JOIN books b ON t.book_id = b.id
        JOIN members m ON t.member_id = m.id
@@ -322,25 +428,23 @@ const returnBook = async (req, res, next) => {
       [id]
     );
 
-    res.json({
+    return res.json({
       success: true,
-      message: 'Book returned successfully',
-      data: updatedTransaction[0]
+      message: 'Book returned successfully.',
+      data: updatedTransactions[0]
     });
   } catch (error) {
-    if (connection && transactionStarted && !transactionCommitted) {
+    if (connection && transactionStarted) {
       try {
         await connection.rollback();
       } catch (rollbackError) {
-        console.error('Return-book rollback failed:', rollbackError.message);
+        console.error('Return rollback error:', rollbackError.message);
       }
     }
 
-    next(error);
+    return next(error);
   } finally {
-    if (connection) {
-      connection.release();
-    }
+    if (connection) connection.release();
   }
 };
 
