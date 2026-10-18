@@ -339,19 +339,20 @@ const returnBook = async (req, res, next) => {
       status: transaction.status
     });
 
-    if (currentStatus !== 'issued') {
-      await connection.rollback();
-      transactionStarted = false;
+    
+if (!['issued', 'overdue'].includes(currentStatus)) {
+  await connection.rollback();
+  transactionStarted = false;
 
-      return res.status(400).json({
-        success: false,
-        message: 'This transaction is not currently issued.',
-        data: {
-          transactionId: id,
-          status: transaction.status
-        }
-      });
+  return res.status(400).json({
+    success: false,
+    message: 'This transaction is not currently issued or overdue.',
+    data: {
+      transactionId: id,
+      status: transaction.status
     }
+  });
+}
 
     const issueDate = normalizeDate(transaction.issue_date_text);
 
